@@ -1,0 +1,309 @@
+version: '3.5'
+
+services:
+  dump1090:
+    build:
+      context: ./dump1090-fa-docker
+    image: johnsom/dump1090-fa-docker:0.01
+    devices:
+      - /dev/bus/usb
+    volumes:
+      - type: volume
+        source: json-data
+        target: /json-data
+        volume:
+          nocopy: false
+      - type: volume
+        source: public-html
+        target: /html
+        volume:
+          nocopy: false
+    command: ["--quiet", "--net", "--write-json", "/json-data/dump1090", "--device", "<DUMP1090 ID/serial>", "--lat", "<receiver latitude>", "--lon", "<receiver longitude>", "--fix", "--modeac", "--gain", "-10", "--wisdom", "/etc/dump1090/wisdom.aarch64.pi4b"]
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: DUMP1090
+        mode: non-blocking
+
+  nginx-fa:
+    build:
+      context: ./nginx-fa-docker
+    image: johnsom/nginx-fa-docker:0.01
+    depends_on:
+      - tar1090
+    ports:
+      - 80:80/tcp
+    volumes:
+      - type: volume
+        source: json-data
+        target: /json-data
+        volume:
+          nocopy: true
+      - type: volume
+        source: public-html
+        target: /html
+        volume:
+          nocopy: true
+      - type: volume
+        source: 978json-data
+        target: /978json-data
+        volume:
+          nocopy: true
+      - type: volume
+        source: 978-html
+        target: /978-html
+        volume:
+          nocopy: true
+      - type: volume
+        source: graphs1090_graphs
+        target: /run/graphs1090
+        volume:
+          nocopy: true
+      - type: volume
+        source: graphs1090_html
+        target: /usr/share/graphs1090/html
+        volume:
+          nocopy: true
+      - type: volume
+        source: tar1090_data
+        target: /run/tar1090
+        volume:
+          nocopy: true
+      - type: volume
+        source: tar1090_html
+        target: /tar1090/html
+        volume:
+          nocopy: true
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: NGINX
+        mode: non-blocking
+
+  dump978:
+    build:
+      context: ./dump978-fa-docker
+    image: johnsom/dump978-fa-docker:0.01
+    command: ["--sdr", "driver=rtlsdr,serial=<DUMP978 ID/serial>", "--raw-port", "30978", "--json-port", "30979"]
+    devices:
+      - /dev/bus/usb
+    ports:
+      - 30979:30979/tcp
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: DUMP978
+        mode: non-blocking
+
+  skyaware978:
+    build:
+      context: ./skyaware978-docker
+    image: johnsom/skyaware978-docker:0.01
+    depends_on:
+      - dump978
+    command: ["--connect", "dump978:30978", "--reconnect-interval", "30", "--json-dir", "/json-data/skyaware978", "--history-count", "120", "--history-interval", "30", "--lat", "<RECEIVER LATITUDE>", "--lon", "<RECEIVER LONGITUDE>"]
+    volumes:
+      - type: volume
+        source: 978json-data
+        target: /json-data
+        volume:
+          nocopy: false
+      - type: volume
+        source: 978-html
+        target: /html
+        volume:
+          nocopy: false
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: SKYAWARE
+        mode: non-blocking
+
+  uat2esnt:
+    build:
+      context: ./uat2esnt-docker
+    image: johnsom/uat2esnt-fa-docker:0.01
+    depends_on:
+      - dump978
+      - dump1090
+    environment:
+      - 'DUMP978-ENDPOINT=dump978:30978'
+      - 'DUMP1090-ENDPOINT=dump1090:30001'
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: UAR2ESNT
+        mode: non-blocking
+
+  feed-adsbx:
+    build:
+      context: ./feed-adsbx-docker
+    image: johnsom/feed-adsbx-docker:0.01
+    volumes:
+      - type: volume
+        source: adsbx-data
+        target: /run/adsbexchange-feed
+        volume:
+          nocopy: false
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: FEEDADSBX
+        mode: non-blocking
+
+  adsbx-mlat:
+    build:
+      context: ./adsbx-mlat-docker
+    image: johnsom/adsbx-mlat-docker:0.01
+    depends_on:
+      - dump1090
+    command: ["--input-type", "dump1090", "--no-udp", "--input-connect", "dump1090:30005", "--server", "feed.adsbexchange.com:31090", "--user", "<MLAT USER NAME>", "--lat", "<RECEIVER LATITUDE>", "--lon", "<RECEIVER LONGITUDE>", "--alt", "<RECEIVER ALTITUDE IN METERS>", "--results", "beast,connect,dump1090:30104", "--results", "basestation,listen,31003", "--results", "beast,listen,30157"]
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: ADSBXMLAT
+        mode: non-blocking
+
+  adsbx-stats:
+    build:
+      context: ./adsbx-stats-docker
+    image: johnsom/adsbx-stats-docker:0.01
+    depends_on:
+      - feed-adsbx
+    volumes:
+      - type: volume
+        source: adsbx-data
+        target: /run/adsbexchange-feed
+        volume:
+          nocopy: false
+    environment:
+      - ADSBXUUID=<ADSB EXCHANGE UUID>
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: ADSBXSTATS
+        mode: non-blocking
+
+  piaware:
+    build:
+      context: ./piaware-docker
+    image: johnsom/piaware-docker:0.01
+    depends_on:
+      - dump1090
+      - dump978
+    environment:
+      - FAFEEDERID=<FLIGHTAWARE FEEDER ID>
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: PIAWARE
+        mode: non-blocking
+
+  graphs1090-collectd:
+    build:
+      context: ./graphs1090-collectd-docker
+    image: johnsom/graphs1090-collectd-docker:0.01
+    depends_on:
+      - feed-adsbx
+    volumes:
+      - type: volume
+        source: collectd
+        target: /var/lib/collectd
+        volume:
+          nocopy: false
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: GRAPHSCLTD
+        mode: non-blocking
+
+  graphs1090-service-graphs:
+    build:
+      context: ./graphs1090-service-graphs-docker
+    image: johnsom/graphs1090-service-graphs-docker:0.01
+    depends_on:
+      - graphs1090-collectd
+    volumes:
+      - type: volume
+        source: collectd
+        target: /var/lib/collectd
+        volume:
+          nocopy: true
+      - type: volume
+        source: graphs1090_html
+        target: /usr/share/graphs1090/html
+        volume:
+          nocopy: false
+      - type: volume
+        source: graphs1090_graphs
+        target: /run/graphs1090
+        volume:
+          nocopy: true
+    restart: unless-stopped
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: GRAPHSSVC
+        mode: non-blocking
+
+  tar1090:
+    build:
+      context: ./tar1090-docker
+    image: johnsom/tar1090-docker:0.02
+    depends_on:
+      - feed-adsbx
+    volumes:
+      - type: volume
+        source: tar1090_data
+        target: /run/tar1090
+        volume:
+          nocopy: false
+      - type: volume
+        source: json-data
+        target: /json-data
+        volume:
+          nocopy: true
+      - type: volume
+        source: tar1090_html
+        target: /usr/local/share/tar1090/html
+        volume:
+          nocopy: false
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "unixgram:///run/rsyslog/adsb-uat/log.sock"
+        tag: TAR1090
+        mode: non-blocking
+
+volumes:
+  json-data:
+  public-html:
+  adsbx-data:
+  978json-data:
+  978-html:
+  collectd:
+  graphs1090_html:
+  graphs1090_graphs:
+  tar1090_data:
+  tar1090_html:

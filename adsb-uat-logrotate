@@ -1,0 +1,22 @@
+/var/log/containers/adsbx-stats.log
+/var/log/containers/adsbx-mlat.log
+/var/log/containers/dump1090.log
+/var/log/containers/dump978.log
+/var/log/containers/feedadsbx.log
+/var/log/containers/graphs1090-collectd.log
+/var/log/containers/graphs1090-svc.log
+/var/log/containers/nginx.log
+/var/log/containers/piaware.log
+/var/log/containers/skyaware978.log
+/var/log/containers/tar1090.log
+/var/log/containers/uat2esnt.log
+{
+        rotate 7
+        daily
+        missingok
+        delaycompress
+        compress
+        postrotate
+                /usr/lib/rsyslog/rsyslog-rotate
+        endscript
+}
